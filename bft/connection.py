@@ -20,6 +20,11 @@ class MemoryConnection(WriteConnection, ReadConnection):
     def receive(self):
         return self._buffer.pop(0)
 
+    def read_all(self):
+        b = list(self._buffer)
+        self._buffer.clear()
+        return b
+
     @property
     def size(self):
         return len(self._buffer)

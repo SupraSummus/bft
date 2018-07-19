@@ -2,54 +2,11 @@ from collections import namedtuple
 import struct
 import logging
 
-from reedsolo import RSCodec
-
 from .utils import max_corrupted_peers
-
+from .connection import MemoryConnection
+from .ec import RSErasureCoding
 
 logger = logging.getLogger(__name__)
-
-
-def encode_ec_blocks(data, min_needed_to_decode, total_blocks):
-    with_ec = RSCodec(
-        nsym=total_blocks - min_needed_to_decode,
-        nsize=total_blocks,
-    ).encode(data)
-    # split encoded data between blocks
-    return [
-        data[i::total_blocks]
-        for i in range(total_blocks)
-    ]
-
-
-def decode_ec_blocks(blocks, min_needed_to_decode):
-    n = len(blocks)
-    block_size = max([
-        len(b)
-        for b in blocks
-        if b is not None
-    ])
-
-    # gather whole bytestring and missing positions
-    data = bytearray(block_size * min_needed_to_decode)
-    missing = set()
-    for i, b in enumerate(blocks):
-        if b is None:
-            missing.update(range(i, len(data), n))
-        else:
-            data[i::n] = b
-
-    # if no redundancy is added skip reedsolo (it has a bug)
-    # https://github.com/tomerfiliba/reedsolomon/issues/13
-    if n - min_needed_to_decode == 0:
-        assert len(missing) == 0
-        return data
-
-    # feed into Reed-Solomon decoder
-    return RSCodec(
-        nsym=n - min_needed_to_decode,  # number of extra bytes per chunk
-        nsize=n,  # encoded chunk size
-    ).decode(data, erase_pos=missing)
 
 
 class _RBCMessage(namedtuple(
@@ -108,8 +65,9 @@ class _RBCRound:
     This class is rather for internal use.
     """
 
-    def __init__(self, block_hashes, hash_function):
+    def __init__(self, block_hashes, hash_function, ec_codec):
         self.hash_function = hash_function
+        self.ec_codec = ec_codec
 
         self.block_hashes = block_hashes
         self.blocks = [None for _ in block_hashes]
@@ -126,8 +84,8 @@ class _RBCRound:
     def data(self):
         n = len(self.block_hashes)
         f = max_corrupted_peers(n)
-        original_data = decode_ec_blocks(self.blocks, n - 2*f)
-        blocks = encode_ec_blocks(original_data, n - 2*f, n)
+        original_data = self.ec_codec.decode(self.blocks)
+        blocks = self.ec_codec.encode(original_data)
         block_hashes = list(map(self.hash_function, blocks))
         if block_hashes == self.block_hashes:
             return original_data
@@ -148,11 +106,18 @@ class RBC:
     ECHO = 1
     READY = 2
 
-    def __init__(self, sender, connections, hash_function, **kwargs):
+    def __init__(self, sender, connections, hash_function, output_stream=None, **kwargs):
         super().__init__(**kwargs)
         self.sender = sender
         self.connections = connections
         self.hash_function = hash_function
+        self.output_stream = output_stream
+        if self.output_stream is None:
+            self.output_stream = MemoryConnection()
+
+        n = len(connections)
+        f = max_corrupted_peers(n)
+        self.ec_codec = RSErasureCoding(n - 2*f, n)
 
         # dict sequential number -> peer
         self.peer_numbers = {
@@ -197,7 +162,11 @@ class RBC:
             # register block data
             rbc_round = self.rounds.setdefault(
                 message.root_hash,
-                _RBCRound(message.block_hashes, hash_function=self.hash_function),
+                _RBCRound(
+                    message.block_hashes,
+                    hash_function=self.hash_function,
+                    ec_codec=self.ec_codec,
+                ),
             )
             rbc_round.feed_block(message.block_number, message.block)
 
@@ -240,7 +209,7 @@ class RBC:
 
             # got enough ECHOes and READYs to output a value
             if rbc_round.block_count >= n - 2*f and len(rbc_round.ready_received) == 2*f + 1:
-                return rbc_round.data
+                self.output_stream.send(rbc_round.data)
 
         else:
             logger.info("got malformed message from peer %s", peer)
@@ -254,7 +223,7 @@ class RBCSender(RBC):
     def send(self, data):
         n = len(self.connections)
         f = max_corrupted_peers(n)
-        blocks = encode_ec_blocks(data, n - 2*f, n)
+        blocks = self.ec_codec.encode(data)
         block_hashes = list(map(self.hash_function, blocks))
         root_hash = self.hash_function(b''.join(block_hashes))
 
