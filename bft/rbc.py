@@ -13,7 +13,8 @@ class _RBCMessage(namedtuple(
     '_RBCMessage',
     ('type', 'root_hash', 'block_hashes', 'block_number', 'block'),
 )):
-    binary_format = ('!'  # network order
+    binary_format = (
+        '!'  # network order
         'B'  # message type
         'H'  # number of blocks
         'H'  # block number
@@ -22,7 +23,7 @@ class _RBCMessage(namedtuple(
     # + root hash
     # + n * block hash
     # + block data to the end of buffer
-    
+
     def encode(self):
         header = struct.pack(
             self.binary_format,
@@ -46,7 +47,7 @@ class _RBCMessage(namedtuple(
             data[:header_size],
         )
         root_hash, *block_hashes = [
-            data[header_size + n*hash_size:header_size + n*hash_size + hash_size]
+            data[header_size + n * hash_size:header_size + n * hash_size + hash_size]
             for n in range(block_count + 1)
         ]
         block = data[header_size + hash_size + block_count * hash_size:]
@@ -82,8 +83,6 @@ class _RBCRound:
 
     @property
     def data(self):
-        n = len(self.block_hashes)
-        f = max_corrupted_peers(n)
         original_data = self.ec_codec.decode(self.blocks)
         blocks = self.ec_codec.encode(original_data)
         block_hashes = list(map(self.hash_function, blocks))
@@ -117,7 +116,7 @@ class RBC:
 
         n = len(connections)
         f = max_corrupted_peers(n)
-        self.ec_codec = RSErasureCoding(n - 2*f, n)
+        self.ec_codec = RSErasureCoding(n - 2 * f, n)
 
         # dict sequential number -> peer
         self.peer_numbers = {
@@ -172,7 +171,6 @@ class RBC:
 
             # got enough ECHOes to multicast READY
             if rbc_round.block_count == n - f:
-                original_data = rbc_round.data
                 if rbc_round.data is not None:
                     if not rbc_round.ready_sent:
                         rbc_round.ready_sent = True
@@ -187,8 +185,8 @@ class RBC:
                     logger.warning("couldnt decode data in round %s", message.root_hash)
 
             # got enough ECHOes and READYs to output a value
-            if rbc_round.block_count == n - 2*f and len(rbc_round.ready_received) >= 2*f + 1:
-                return rbc_round.data
+            if rbc_round.block_count == n - 2 * f and len(rbc_round.ready_received) >= 2 * f + 1:
+                self.output_stream.send(rbc_round.data)
 
         elif message.type == RBC.READY:
             rbc_round = self.rounds.get(message.root_hash)
@@ -208,7 +206,7 @@ class RBC:
                 ).encode())
 
             # got enough ECHOes and READYs to output a value
-            if rbc_round.block_count >= n - 2*f and len(rbc_round.ready_received) == 2*f + 1:
+            if rbc_round.block_count >= n - 2 * f and len(rbc_round.ready_received) == 2 * f + 1:
                 self.output_stream.send(rbc_round.data)
 
         else:
@@ -218,11 +216,10 @@ class RBC:
         for c in self.connections.values():
             c.send(message)
 
+
 class RBCSender(RBC):
 
     def send(self, data):
-        n = len(self.connections)
-        f = max_corrupted_peers(n)
         blocks = self.ec_codec.encode(data)
         block_hashes = list(map(self.hash_function, blocks))
         root_hash = self.hash_function(b''.join(block_hashes))

@@ -45,7 +45,7 @@ class RSErasureCoding(ErasureCoding):
     def encode(self, data):
         assert len(data) % self.payload_size == 0
         parts = [
-            self.codec.encode(data[off:off+self.payload_size])
+            self.codec.encode(data[off:off + self.payload_size])
             for off in range(0, len(data), self.payload_size)
         ]
         # transpose parts to split redundant bits between blocks

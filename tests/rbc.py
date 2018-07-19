@@ -19,7 +19,7 @@ class RBCTestCase(TestCase):
         rbc.send(b'A message I\'d like to broadcast.')
         rbc.send(b'Thank you for cooperation.')
         while loopback.size > 0:
-            d = rbc.feed(node_name, loopback.receive())
+            rbc.feed(node_name, loopback.receive())
 
         output = rbc.output_stream.read_all()
         self.assertEqual(len(output), 2)
@@ -32,6 +32,7 @@ class RBCTestCase(TestCase):
             for start in range(4)
             for end in range(4)
         }
+
         def conns(peer):
             return {
                 end: c
